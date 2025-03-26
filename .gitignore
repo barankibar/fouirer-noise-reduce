@@ -29,3 +29,21 @@ output/*
 
 # Ignore all files with .mp3 extension
 *.mp3
+
+# Ignore all files in the analyses directory
+analyses/*
+
+# Ignore all files in the reports directory
+reports/*
+
+# Ignore all files in the logs directory
+logs/*
+
+# Ignore all files in the temp directory
+temp/*
+
+# Ignore all files in the cache directory
+cache/*
+
+# Ignore all files in the data directory
+data/*
