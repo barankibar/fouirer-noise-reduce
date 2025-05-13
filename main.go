@@ -71,13 +71,21 @@ func (ap *AudioProcessor) Process() error {
 		return fmt.Errorf("failed to create analyses directory: %w", err)
 	}
 
-	// Create pre-cleaning analysis file
+	// Create pre-cleaning analysis file with clear naming
 	inputBaseName := filepath.Base(ap.inputFile)
-	preCleaningAnalysisFile := filepath.Join(analysesDir, inputBaseName+"-pre-analysis.md")
-	fmt.Printf("[%3d%%] Creating pre-cleaning analysis file: %s\n", 15, preCleaningAnalysisFile)
+	timestamp := time.Now().Format("20060102-150405")
+	preCleaningAnalysisFile := filepath.Join(analysesDir, fmt.Sprintf("%s-PRE-CLEANING-%s.md", inputBaseName, timestamp))
+	
+	fmt.Printf("[%3d%%] Creating PRE-cleaning analysis file for input: %s\n", 15, preCleaningAnalysisFile)
+	fmt.Println("----------------------------------------")
+	fmt.Println("ANALYZING INPUT FILE (PRE-CLEANING)...")
+	
 	if err := ap.writeAnalysisToFile(buf, preCleaningAnalysisFile, true); err != nil {
 		return fmt.Errorf("pre-cleaning analysis error: %w", err)
 	}
+	
+	fmt.Println("INPUT ANALYSIS COMPLETED")
+	fmt.Println("----------------------------------------")
 
 	// If automatic parameter adjustment is requested, analyze the audio file and determine parameters
 	if ap.autoParams {
@@ -92,10 +100,11 @@ func (ap *AudioProcessor) Process() error {
 	}
 
 	// Display parameters
-	fmt.Printf("Threshold value: %.2f\n", ap.threshold)
-	fmt.Printf("Noise reduction ratio: %.2f\n", ap.noiseReduction)
-	fmt.Printf("Signal enhancement: %.2f\n", ap.enhanceFactor)
-	fmt.Printf("Protected frequency range: %.0f Hz - %.0f Hz\n", ap.frequencyRange[0], ap.frequencyRange[1])
+	fmt.Println("NOISE REDUCTION PARAMETERS:")
+	fmt.Printf("• Threshold value: %.2f\n", ap.threshold)
+	fmt.Printf("• Noise reduction ratio: %.2f\n", ap.noiseReduction)
+	fmt.Printf("• Signal enhancement: %.2f\n", ap.enhanceFactor)
+	fmt.Printf("• Protected frequency range: %.0f Hz - %.0f Hz\n", ap.frequencyRange[0], ap.frequencyRange[1])
 	fmt.Println("----------------------------------------")
 
 	// 2. Perform noise cleaning operation
@@ -108,13 +117,20 @@ func (ap *AudioProcessor) Process() error {
 		75,
 		time.Since(startTime).Seconds())
 
-	// Create post-cleaning analysis file
+	// Create post-cleaning analysis file with clear naming
 	outputBaseName := filepath.Base(ap.outputFile)
-	postCleaningAnalysisFile := filepath.Join(analysesDir, outputBaseName+"-post-analysis.md")
-	fmt.Printf("[%3d%%] Creating post-cleaning analysis file: %s\n", 80, postCleaningAnalysisFile)
+	postCleaningAnalysisFile := filepath.Join(analysesDir, fmt.Sprintf("%s-POST-CLEANING-%s.md", outputBaseName, timestamp))
+	
+	fmt.Printf("[%3d%%] Creating POST-cleaning analysis file for output: %s\n", 80, postCleaningAnalysisFile)
+	fmt.Println("----------------------------------------")
+	fmt.Println("ANALYZING OUTPUT FILE (POST-CLEANING)...")
+	
 	if err := ap.writeAnalysisToFile(cleanedBuffer, postCleaningAnalysisFile, false); err != nil {
 		return fmt.Errorf("post-cleaning analysis error: %w", err)
 	}
+	
+	fmt.Println("OUTPUT ANALYSIS COMPLETED")
+	fmt.Println("----------------------------------------")
 
 	// Ensure output directory exists
 	outputDir := filepath.Dir(ap.outputFile)
@@ -132,9 +148,10 @@ func (ap *AudioProcessor) Process() error {
 		time.Since(startTime).Seconds())
 	fmt.Println("----------------------------------------")
 
-	fmt.Printf("\nAnalysis files created:\n")
-	fmt.Printf("Pre-cleaning: %s\n", preCleaningAnalysisFile)
-	fmt.Printf("Post-cleaning: %s\n", postCleaningAnalysisFile)
+	fmt.Printf("\nANALYSIS REPORTS:\n")
+	fmt.Printf("• PRE-cleaning (input file):  %s\n", preCleaningAnalysisFile)
+	fmt.Printf("• POST-cleaning (output file): %s\n", postCleaningAnalysisFile)
+	fmt.Printf("\nProcess completed successfully.\n")
 
 	return nil
 }
@@ -934,14 +951,21 @@ func (ap *AudioProcessor) writeAnalysisToFile(buf *audio.IntBuffer, filePath str
 		samples[i] = float64(buf.Data[i])
 	}
 
-	// Write report header
-	fmt.Fprintf(file, "# Professional Audio Analysis Report\n")
-	fmt.Fprintf(file, "# File: %s\n", fileToAnalyze)
-	fmt.Fprintf(file, "# Date: %s\n", currentTime)
-	fmt.Fprintf(file, "# Analysis Stage: %s\n", map[bool]string{true: "Pre-cleaning", false: "Post-cleaning"}[isPreCleaning])
-	fmt.Fprintf(file, "# Format: %d Hz, %d channels, %d-bit\n",
+	// Write report header with clear distinction between pre and post cleaning
+	fmt.Fprintf(file, "# Professional Audio Analysis Report\n\n")
+	
+	if isPreCleaning {
+		fmt.Fprintf(file, "## PRE-CLEANING ANALYSIS\n")
+		fmt.Fprintf(file, "### Input File: %s\n", fileToAnalyze)
+	} else {
+		fmt.Fprintf(file, "## POST-CLEANING ANALYSIS\n")
+		fmt.Fprintf(file, "### Output File: %s\n", fileToAnalyze)
+	}
+	
+	fmt.Fprintf(file, "### Date: %s\n", currentTime)
+	fmt.Fprintf(file, "### Format: %d Hz, %d channels, %d-bit\n",
 		buf.Format.SampleRate, buf.Format.NumChannels, buf.SourceBitDepth)
-	fmt.Fprintf(file, "# Duration: %.2f seconds\n\n", duration)
+	fmt.Fprintf(file, "### Duration: %.2f seconds\n\n", duration)
 
 	// Calculate amplitude statistics
 	var sum, sumSquared float64
@@ -980,10 +1004,19 @@ func (ap *AudioProcessor) writeAnalysisToFile(buf *audio.IntBuffer, filePath str
 	// Executive summary section
 	fmt.Fprintf(file, "## 1. Executive Summary\n\n")
 
-	// Değişik bir çağrı (maxAmp parametresini çıkardık)
 	qualityRating := determineAudioQuality(rmsAmp, crestFactor, dynamicRange, zeroCrossingRate)
 	fmt.Fprintf(file, "**Overall Quality Rating:** %s\n\n", qualityRating.rating)
 	fmt.Fprintf(file, "%s\n\n", qualityRating.description)
+
+	// Improvement section for post-cleaning analysis
+	if !isPreCleaning {
+		fmt.Fprintf(file, "### Improvements After Cleaning\n\n")
+		fmt.Fprintf(file, "This analysis examines the audio quality after noise reduction processing. Compare with pre-cleaning analysis to evaluate improvements in:\n\n")
+		fmt.Fprintf(file, "- Signal-to-Noise Ratio (SNR)\n")
+		fmt.Fprintf(file, "- Dynamic Range\n")
+		fmt.Fprintf(file, "- Spectral Balance\n")
+		fmt.Fprintf(file, "- Overall Clarity\n\n")
+	}
 
 	// Amplitude Statistics section
 	fmt.Fprintf(file, "## 2. Amplitude Statistics\n\n")
@@ -1042,8 +1075,54 @@ func (ap *AudioProcessor) writeAnalysisToFile(buf *audio.IntBuffer, filePath str
 	freqResolution := sampleRate / float64(windowSize)
 
 	var spectralCentroidSum, spectralEnergySum float64
+	var spectralFlatness float64 = 1.0
+	var spectralRolloff float64
+	var energyEntropy float64
+	
+	// Calculate thresholds for noise detection
+	var noiseThreshold float64 = 0
+	
+	// First pass to determine noise floor
+	for i := 0; i < numWindows; i++ {
+		startIdx := i * hopSize
+		endIdx := startIdx + windowSize
+		if endIdx > len(samples) {
+			endIdx = len(samples)
+		}
 
-	// Analyze each window
+		window := make([]float64, windowSize)
+		copy(window, samples[startIdx:min(endIdx, len(samples))])
+		
+		// Apply Hanning window
+		for j := range window {
+			window[j] *= 0.5 * (1 - math.Cos(2*math.Pi*float64(j)/float64(windowSize-1)))
+		}
+		
+		// Calculate FFT
+		spectrum := fft.Coefficients(nil, window)
+		
+		// Estimate noise from high frequency range (usually contains background noise)
+		highFreqStart := int(8000 / freqResolution)
+		var highFreqSum float64
+		var highFreqCount int
+		
+		for bin := highFreqStart; bin < windowSize/2; bin++ {
+			magnitude := cmplx.Abs(spectrum[bin])
+			highFreqSum += magnitude
+			highFreqCount++
+		}
+		
+		if highFreqCount > 0 {
+			noiseThreshold += highFreqSum / float64(highFreqCount)
+		}
+	}
+	
+	// Average noise threshold
+	if numWindows > 0 {
+		noiseThreshold /= float64(numWindows)
+	}
+
+	// Second pass: main spectral analysis
 	for i := 0; i < numWindows; i++ {
 		startIdx := i * hopSize
 		endIdx := startIdx + windowSize
@@ -1061,16 +1140,39 @@ func (ap *AudioProcessor) writeAnalysisToFile(buf *audio.IntBuffer, filePath str
 
 		// Calculate FFT
 		spectrum := fft.Coefficients(nil, window)
-
-		// Sum energy in each band
+		
+		// For spectral flatness calculation
+		var geometricMean float64 = 1.0
+		var arithmeticMean float64 = 0
+		var binCount float64 = 0
+		var totalPower float64 = 0
+		var cumulativePower float64 = 0
+		
+		// For entropy calculation
+		var energyProbabilities []float64
+		
+		// Analyze each frequency bin
 		for bin := 1; bin < windowSize/2; bin++ {
 			freq := freqResolution * float64(bin)
 			magnitude := cmplx.Abs(spectrum[bin])
 			power := magnitude * magnitude
+			
+			totalPower += power
+			energyProbabilities = append(energyProbabilities, power)
+			
+			// For spectral flatness
+			if magnitude > 0 {
+				geometricMean *= math.Pow(magnitude, 1.0/float64(windowSize/2))
+				arithmeticMean += magnitude
+				binCount++
+			}
 
 			// Calculate spectral centroid contribution
 			spectralCentroidSum += freq * power
 			spectralEnergySum += power
+			
+			// Calculate cumulative power for rolloff
+			cumulativePower += power
 
 			// Add to band energy
 			for b, band := range bands {
@@ -1080,14 +1182,57 @@ func (ap *AudioProcessor) writeAnalysisToFile(buf *audio.IntBuffer, filePath str
 				}
 			}
 		}
+		
+		// Calculate spectral rolloff (frequency below which 85% of energy is contained)
+		cumulativePower = 0
+		for bin := 1; bin < windowSize/2; bin++ {
+			magnitude := cmplx.Abs(spectrum[bin])
+			power := magnitude * magnitude
+			cumulativePower += power
+			
+			if cumulativePower >= totalPower * 0.85 {
+				spectralRolloff += freqResolution * float64(bin)
+				break
+			}
+		}
+		
+		// Calculate spectral flatness for this frame
+		if binCount > 0 {
+			arithmeticMean /= binCount
+			if arithmeticMean > 0 {
+				frameSpectralFlatness := geometricMean / arithmeticMean
+				spectralFlatness *= frameSpectralFlatness
+			}
+		}
+		
+		// Calculate energy entropy
+		if len(energyProbabilities) > 0 {
+			// Normalize probabilities
+			sum := 0.0
+			for _, p := range energyProbabilities {
+				sum += p
+			}
+			
+			if sum > 0 {
+				entropy := 0.0
+				for _, p := range energyProbabilities {
+					prob := p / sum
+					if prob > 0 {
+						entropy -= prob * math.Log2(prob)
+					}
+				}
+				energyEntropy += entropy
+			}
+		}
 	}
 
-	// Normalize band energies
-	var totalEnergy float64
-	for _, energy := range bandEnergies {
-		totalEnergy += energy
+	// Normalize spectral features
+	if numWindows > 0 {
+		spectralFlatness = math.Pow(spectralFlatness, 1.0/float64(numWindows))
+		spectralRolloff /= float64(numWindows)
+		energyEntropy /= float64(numWindows)
 	}
-
+	
 	// Calculate spectral centroid
 	spectralCentroid := 0.0
 	if spectralEnergySum > 0 {
@@ -1101,11 +1246,18 @@ func (ap *AudioProcessor) writeAnalysisToFile(buf *audio.IntBuffer, filePath str
 
 	var dominantBand string
 	var dominantPercentage float64
+	var totalBandEnergy float64
 
+	// Calculate total energy across all bands
+	for _, energy := range bandEnergies {
+		totalBandEnergy += energy
+	}
+
+	// Write band energies
 	for i, band := range bands {
 		percentage := 0.0
-		if totalEnergy > 0 {
-			percentage = (bandEnergies[i] / totalEnergy) * 100
+		if totalBandEnergy > 0 {
+			percentage = (bandEnergies[i] / totalBandEnergy) * 100
 		}
 
 		fmt.Fprintf(file, "| %s | %.0f-%.0f | %.4e | %.2f%% | %s |\n",
@@ -1123,14 +1275,29 @@ func (ap *AudioProcessor) writeAnalysisToFile(buf *audio.IntBuffer, filePath str
 	fmt.Fprintf(file, "|--------|-------|---------------|\n")
 	fmt.Fprintf(file, "| Spectral Centroid | %.2f Hz | %s |\n",
 		spectralCentroid, interpretSpectralCentroid(spectralCentroid))
-	fmt.Fprintf(file, "| Dominant Band | %s (%.2f%%) | %s |\n\n",
+	fmt.Fprintf(file, "| Dominant Band | %s (%.2f%%) | %s |\n",
 		dominantBand, dominantPercentage, interpretDominantBand(dominantBand))
+	fmt.Fprintf(file, "| Spectral Rolloff | %.2f Hz | Frequency below which 85%% of energy is contained |\n", 
+		spectralRolloff)
+	fmt.Fprintf(file, "| Spectral Flatness | %.4f | %s |\n", 
+		spectralFlatness, interpretSpectralFlatness(spectralFlatness))
+	fmt.Fprintf(file, "| Spectral Entropy | %.4f | %s |\n\n",
+		energyEntropy, interpretSpectralEntropy(energyEntropy))
 
 	// Noise analysis
 	fmt.Fprintf(file, "## 4. Noise Analysis\n\n")
 
-	// Estimate noise floor
-	noiseFloor := ap.estimateNoiseProfile(samples[:min(len(samples), 10*buf.Format.SampleRate)])
+	// Estimate noise floor using the calculated threshold
+	noiseFloor := noiseThreshold
+	
+	if isPreCleaning {
+		// For pre-cleaning, also use our custom noise estimation function
+		customNoiseFloor := ap.estimateNoiseProfile(samples[:min(len(samples), 10*buf.Format.SampleRate)])
+		// Take the average of the two methods
+		noiseFloor = (noiseFloor + customNoiseFloor) / 2
+	}
+	
+	// Calculate signal-to-noise ratio
 	snr := 0.0
 	if noiseFloor > 0 {
 		snr = rmsAmp / noiseFloor
@@ -1144,11 +1311,59 @@ func (ap *AudioProcessor) writeAnalysisToFile(buf *audio.IntBuffer, filePath str
 	fmt.Fprintf(file, "| Signal-to-Noise Ratio | %.2f | - |\n", snr)
 	fmt.Fprintf(file, "| SNR (dB) | %.2f dB | %s |\n\n",
 		snrDB, interpretSNR(snrDB))
+		
+	// Frequency Distribution Visualization (ASCII art spectrogram representation)
+	fmt.Fprintf(file, "## 5. Frequency Distribution Visualization\n\n")
+	fmt.Fprintf(file, "```\n")
+	fmt.Fprintf(file, "Frequency Distribution (higher amplitude = more energy)\n")
+	fmt.Fprintf(file, "Low Freq |")
+	
+	// Create simplified visualization of frequency distribution
+	bandWidth := 80 / len(bands) // 80 characters wide output
+	
+	for i := range bands {
+		// Calculate normalized energy for this band (0-9)
+		normalizedEnergy := 0
+		if totalBandEnergy > 0 {
+			normalizedEnergy = int(math.Min(9, math.Floor((bandEnergies[i]/totalBandEnergy)*100/10)))
+		}
+		
+		// Print band visualization
+		for j := 0; j < bandWidth; j++ {
+			if j == bandWidth/2 {
+				fmt.Fprintf(file, "%d", normalizedEnergy)
+			} else {
+				if normalizedEnergy > 0 {
+					fmt.Fprintf(file, "▓")
+				} else {
+					fmt.Fprintf(file, "░")
+				}
+			}
+		}
+	}
+	
+	fmt.Fprintf(file, "| High Freq\n")
+	fmt.Fprintf(file, "          ")
+	
+	// Print frequency band labels
+	for i := range bands {
+		if i == 0 {
+			fmt.Fprintf(file, "%-*s", bandWidth, "SubB")
+		} else if i == len(bands)-1 {
+			fmt.Fprintf(file, "%-*s", bandWidth, "Air")
+		} else if i == len(bands)/2 {
+			fmt.Fprintf(file, "%-*s", bandWidth, "Mid")
+		} else {
+			fmt.Fprintf(file, "%-*s", bandWidth, "")
+		}
+	}
+	
+	fmt.Fprintf(file, "\n")
+	fmt.Fprintf(file, "```\n\n")
 
-	// If post-cleaning, add cleaning parameters
+	// If post-cleaning, add cleaning parameters and comparison
 	if !isPreCleaning {
-		fmt.Fprintf(file, "## 5. Cleaning Parameters\n\n")
-		fmt.Fprintf(file, "This is a post-cleaning analysis. Compare with pre-cleaning analysis to evaluate effectiveness.\n\n")
+		fmt.Fprintf(file, "## 6. Cleaning Parameters Used\n\n")
 		fmt.Fprintf(file, "| Parameter | Value | Description |\n")
 		fmt.Fprintf(file, "|-----------|-------|-------------|\n")
 		fmt.Fprintf(file, "| Threshold | %.2f | Minimum amplitude threshold for noise detection |\n",
@@ -1160,28 +1375,158 @@ func (ap *AudioProcessor) writeAnalysisToFile(buf *audio.IntBuffer, filePath str
 		fmt.Fprintf(file, "| Frequency Range | %.0f-%.0f Hz | Protected frequency band for music content |\n\n",
 			ap.frequencyRange[0], ap.frequencyRange[1])
 
-		// Add improvement assessment
-		fmt.Fprintf(file, "## 6. Improvement Assessment\n\n")
-		fmt.Fprintf(file, "To properly assess the improvement, compare these metrics with the pre-cleaning analysis:\n\n")
-		fmt.Fprintf(file, "- Signal-to-Noise Ratio (SNR) improvement\n")
-		fmt.Fprintf(file, "- Dynamic Range changes\n")
-		fmt.Fprintf(file, "- Frequency balance preservation\n")
-		fmt.Fprintf(file, "- Overall amplitude characteristics\n\n")
-		fmt.Fprintf(file, "Look for improved SNR, consistent spectral centroid, and maintained dynamic range for ideal cleaning results.\n")
+		fmt.Fprintf(file, "## 7. Conclusion and Recommendations\n\n")
+		fmt.Fprintf(file, "This analysis represents the audio AFTER noise reduction processing. ")
+		fmt.Fprintf(file, "To evaluate the effectiveness of the cleaning process, compare with the pre-cleaning analysis.\n\n")
+		
+		fmt.Fprintf(file, "Successful noise reduction typically shows:\n\n")
+		fmt.Fprintf(file, "- Improved Signal-to-Noise Ratio (SNR)\n")
+		fmt.Fprintf(file, "- Maintained or improved spectral balance in music frequency ranges\n")
+		fmt.Fprintf(file, "- Similar or better dynamic range\n")
+		fmt.Fprintf(file, "- Reduced energy in non-music frequency bands\n")
+		fmt.Fprintf(file, "- Maintained spectral centroid (indicating preserved tone color)\n\n")
+		
+		fmt.Fprintf(file, "For best results when playing this audio:\n\n")
+		fmt.Fprintf(file, "- Use quality audio playback equipment\n")
+		fmt.Fprintf(file, "- Consider light equalization if needed (based on dominant frequency analysis)\n")
+		fmt.Fprintf(file, "- Set appropriate volume levels to appreciate the improved dynamic range\n")
 	} else {
-		// Recommendations for pre-cleaning
-		fmt.Fprintf(file, "## 5. Recommendations\n\n")
-
-		// Değişik bir çağrı (meanAmp ve spectralCentroid parametrelerini çıkardık)
-		recommendations := generateRecommendations(rmsAmp, maxAmp, crestFactor,
-			dynamicRange, dominantBand, snrDB)
-
-		for i, rec := range recommendations {
-			fmt.Fprintf(file, "%d. **%s**: %s\n\n", i+1, rec.title, rec.description)
+		// For pre-cleaning analysis, add recommendations
+		fmt.Fprintf(file, "## 6. Recommended Cleaning Approach\n\n")
+		
+		// Generate different recommendations based on audio characteristics
+		fmt.Fprintf(file, "This analysis represents the audio BEFORE noise reduction processing. ")
+		fmt.Fprintf(file, "Based on the audio characteristics, the following approach is recommended:\n\n")
+		
+		// Generate cleaning recommendations
+		recs := generateCleaningRecommendations(snrDB, spectralFlatness, energyEntropy, 
+			dominantBand, dominantPercentage, zeroCrossingRate)
+			
+		// Print recommendations
+		for i, rec := range recs {
+			fmt.Fprintf(file, "### %d. %s\n\n%s\n\n", i+1, rec.title, rec.description)
 		}
 	}
 
 	return nil
+}
+
+// New helper functions for spectral analysis interpretation
+func interpretSpectralFlatness(value float64) string {
+	if value > 0.5 {
+		return "Very noisy (white noise-like)"
+	} else if value > 0.2 {
+		return "Significant noise content"
+	} else if value > 0.1 {
+		return "Moderate tonal and noise content"
+	} else if value > 0.05 {
+		return "Strong tonal content, some noise"
+	} else {
+		return "Very tonal (pure musical content)"
+	}
+}
+
+func interpretSpectralEntropy(value float64) string {
+	if value > 6.0 {
+		return "Very chaotic/random spectrum (likely noise)"
+	} else if value > 5.0 {
+		return "High complexity spectrum (noise + music)"
+	} else if value > 4.0 {
+		return "Moderate complexity (musical with some noise)"
+	} else if value > 3.0 {
+		return "Structured spectrum (clear musical content)"
+	} else {
+		return "Very organized spectrum (pure tones, minimal noise)"
+	}
+}
+
+// CleaningRecommendation represents a specific recommendation for noise cleaning
+type CleaningRecommendation struct {
+	title       string
+	description string
+}
+
+// generateCleaningRecommendations creates specific recommendations based on audio analysis
+func generateCleaningRecommendations(snrDB, spectralFlatness, energyEntropy float64,
+	dominantBand string, dominantPercentage, zcr float64) []CleaningRecommendation {
+	
+	var recommendations []CleaningRecommendation
+	
+	// SNR-based recommendations
+	if snrDB < 15 {
+		recommendations = append(recommendations, CleaningRecommendation{
+			title: "Use Aggressive Noise Reduction",
+			description: "The audio has a very poor SNR (< 15dB), indicating substantial noise contamination. " +
+				"Recommended to use aggressive noise reduction settings (0.4-0.5) with focus on preserving only " +
+				"the strongest musical elements. Some audio quality loss may be acceptable to remove severe noise.",
+		})
+	} else if snrDB < 30 {
+		recommendations = append(recommendations, CleaningRecommendation{
+			title: "Use Moderate Noise Reduction",
+			description: "The audio has a moderate SNR (15-30dB). Apply moderate noise reduction (0.3-0.4) " +
+				"with careful protection of mid-range frequencies to preserve vocal clarity and musical details.",
+		})
+	} else {
+		recommendations = append(recommendations, CleaningRecommendation{
+			title: "Use Gentle Noise Reduction",
+			description: "The audio has a good SNR (>30dB). Apply gentle noise reduction (0.2-0.3) " +
+				"focusing only on the frequency bands where noise is present while fully preserving musical content.",
+		})
+	}
+	
+	// Spectral characteristics recommendations
+	if spectralFlatness > 0.2 {
+		recommendations = append(recommendations, CleaningRecommendation{
+			title: "Focus on Broadband Noise Reduction",
+			description: "High spectral flatness indicates significant broadband noise. " +
+				"Recommended to use FFT filtering with focus on reducing high-frequency noise " +
+				"while preserving transients in musical material.",
+		})
+	}
+	
+	// Dominant band recommendations
+	switch dominantBand {
+	case "Sub-bass", "Bass":
+		recommendations = append(recommendations, CleaningRecommendation{
+			title: "Protect Low Frequencies",
+			description: "Audio has significant low-frequency content. " +
+				"Reduce noise primarily in higher bands (>4kHz), while using gentler settings " +
+				"for bass frequencies to maintain fullness and power.",
+		})
+	case "Midrange":
+		recommendations = append(recommendations, CleaningRecommendation{
+			title: "Preserve Vocal Range",
+			description: "Audio has dominant mid-range content typical of vocals and main instruments. " +
+				"Use selective frequency protection for 500-2000 Hz range with slightly stronger " +
+				"reduction in very low and very high frequencies.",
+		})
+	case "Upper-midrange", "Presence":
+		recommendations = append(recommendations, CleaningRecommendation{
+			title: "Preserve Detail and Definition",
+			description: "Audio has significant upper-mid/presence energy. " +
+				"Focus cleaning on removing low-frequency rumble and very high frequency hiss " +
+				"while fully protecting the 2-6 kHz range for intelligibility and detail.",
+		})
+	}
+	
+	// Zero-crossing rate recommendations
+	if zcr > 0.15 {
+		recommendations = append(recommendations, CleaningRecommendation{
+			title: "Address High-Frequency Noise",
+			description: "High zero-crossing rate indicates significant high-frequency content or noise. " +
+				"Apply more aggressive noise reduction above 8 kHz while being careful to preserve " +
+				"natural cymbals and high-frequency musical transients.",
+		})
+	} else if zcr < 0.05 {
+		recommendations = append(recommendations, CleaningRecommendation{
+			title: "Address Low-Frequency Noise",
+			description: "Low zero-crossing rate indicates dominant low-frequency content. " +
+				"Apply a high-pass filter around 40-60 Hz to eliminate sub-bass rumble, " +
+				"while preserving bass instruments above this range.",
+		})
+	}
+	
+	return recommendations
 }
 
 // AudioQualityRating represents a quality assessment
@@ -1274,72 +1619,6 @@ func determineAudioQuality(rmsAmp, crestFactor, dynamicRange, zcr float64) Audio
 	}
 
 	return rating
-}
-
-// Recommendation represents an analysis suggestion
-type Recommendation struct {
-	title       string
-	description string
-}
-
-// generateRecommendations creates actionable suggestions based on analysis
-func generateRecommendations(rmsAmp, maxAmp, crestFactor,
-	dynamicRange float64, dominantBand string, snrDB float64) []Recommendation {
-	var recommendations []Recommendation
-
-	// SNR-based recommendations
-	if snrDB < 20 {
-		recommendations = append(recommendations, Recommendation{
-			title:       "Noise Reduction Priority",
-			description: "The signal-to-noise ratio is very low (under 20dB). Consider applying moderate to aggressive noise reduction with focus on preserving mid-range frequencies.",
-		})
-	} else if snrDB < 40 {
-		recommendations = append(recommendations, Recommendation{
-			title:       "Mild Noise Reduction",
-			description: "The signal has some noise present. Consider applying gentle noise reduction to improve clarity without affecting the original character.",
-		})
-	}
-
-	// Dynamic range recommendations
-	if crestFactor > 15 {
-		recommendations = append(recommendations, Recommendation{
-			title:       "Dynamic Range Control",
-			description: "The audio has very high peak-to-average ratio. Consider applying compression or limiting to prevent potential distortion while maintaining overall dynamics.",
-		})
-	} else if crestFactor < 3 && dynamicRange < 40 {
-		recommendations = append(recommendations, Recommendation{
-			title:       "Dynamic Enhancement",
-			description: "The audio appears compressed with limited dynamic range. Consider applying mild expansion to restore natural dynamics.",
-		})
-	}
-
-	// Spectral balance recommendations
-	if dominantBand == "Sub-bass" || dominantBand == "Bass" {
-		recommendations = append(recommendations, Recommendation{
-			title:       "High Frequency Enhancement",
-			description: "Low frequencies are dominant. Consider gentle high-shelf EQ boost (2-3dB) above 3kHz to improve clarity and presence.",
-		})
-	} else if dominantBand == "Presence" || dominantBand == "Brilliance" {
-		recommendations = append(recommendations, Recommendation{
-			title:       "Low/Mid Enhancement",
-			description: "High frequencies are dominant. Consider gentle low-mid boost (2-3dB) in the 250-500Hz range to add warmth and body.",
-		})
-	}
-
-	// Amplitude recommendations
-	if maxAmp > 30000 {
-		recommendations = append(recommendations, Recommendation{
-			title:       "Level Normalization",
-			description: "Signal peaks are very high. Consider normalizing the audio to prevent potential clipping or distortion in playback systems.",
-		})
-	} else if rmsAmp < 1000 {
-		recommendations = append(recommendations, Recommendation{
-			title:       "Volume Enhancement",
-			description: "Overall signal level is quite low. Consider applying gain or gentle compression with makeup gain to increase apparent loudness.",
-		})
-	}
-
-	return recommendations
 }
 
 // Helper interpretation functions
