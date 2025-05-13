@@ -1,8 +1,6 @@
 module github.com/barankibar
 
-go 1.23.0
-
-toolchain go1.23.7
+go 1.23
 
 require (
 	github.com/go-audio/audio v1.0.0

@@ -448,20 +448,23 @@ func (ap *AudioProcessor) denoiseWithFFT(samples []float64, noiseProfile float64
 
 	// Calculate frequency range in Hz
 	freqResolution := sampleRate / float64(paddedLength)
-	minFreqIndex := int(ap.frequencyRange[0] / freqResolution)
-	maxFreqIndex := int(ap.frequencyRange[1] / freqResolution)
-	if maxFreqIndex > len(freqDomain)/2 {
-		maxFreqIndex = len(freqDomain) / 2
+	
+	// Music frequency ranges (Hz)
+	musicRanges := [][2]float64{
+		{60, 250},    // Bass
+		{250, 2000},  // Mid-range (vocals and most instruments)
+		{2000, 4000}, // Upper mid-range (presence)
+		{4000, 8000}, // High frequencies (brilliance)
 	}
 
-	// Low/high frequency limits (for statistics)
-	midFreqIndex := int(1000 / freqResolution) // 1000 Hz mid frequency assumed
+	// Convert frequency ranges to FFT bin indices
+	musicBinRanges := make([][2]int, len(musicRanges))
+	for i, r := range musicRanges {
+		musicBinRanges[i][0] = int(r[0] / freqResolution)
+		musicBinRanges[i][1] = int(r[1] / freqResolution)
+	}
 
-	// Define low/high noise thresholds
-	lowNoiseThreshold := noiseProfile * 1.5
-	highNoiseThreshold := noiseProfile * 4.0
-
-	// Keep original phase information for phase sensitivity
+	// Keep original phase information
 	phases := make([]float64, len(freqDomain))
 	for i := range freqDomain {
 		phases[i] = cmplx.Phase(freqDomain[i])
@@ -471,64 +474,83 @@ func (ap *AudioProcessor) denoiseWithFFT(samples []float64, noiseProfile float64
 	var totalLowFreqPower, totalHighFreqPower float64
 	var filteredLowFreqPower, filteredHighFreqPower float64
 
+	// Adaptive noise threshold based on frequency
+	adaptiveThresholds := make([]float64, len(freqDomain))
+	for i := range freqDomain {
+		freq := float64(i) * freqResolution
+		
+		// Higher threshold for low frequencies (bass and rumble)
+		if freq < 100 {
+			adaptiveThresholds[i] = noiseProfile * 2.0
+		} else if freq < 1000 {
+			adaptiveThresholds[i] = noiseProfile * 1.5
+		} else {
+			adaptiveThresholds[i] = noiseProfile
+		}
+	}
+
 	for i := range freqDomain {
 		magnitude := cmplx.Abs(freqDomain[i])
 		phase := phases[i]
+		freq := float64(i) * freqResolution
 
 		// Sum power for low/high frequency statistics
-		if i <= midFreqIndex || i >= paddedLength-midFreqIndex {
+		if freq < 1000 {
 			totalLowFreqPower += magnitude * magnitude
 		} else {
 			totalHighFreqPower += magnitude * magnitude
 		}
 
-		// Keep frequencies if they are important for music (60Hz-14kHz) and strong enough
-		inMusicRange := (i >= minFreqIndex && i <= maxFreqIndex) ||
-			(i >= paddedLength-maxFreqIndex && i <= paddedLength-minFreqIndex)
+		// Check if frequency is in music range
+		inMusicRange := false
+		for _, r := range musicBinRanges {
+			if i >= r[0] && i <= r[1] {
+				inMusicRange = true
+				break
+			}
+		}
 
 		var newMagnitude float64
 		origMagnitude := magnitude
 
-		if inMusicRange && magnitude > highNoiseThreshold {
-			// Slightly enhance important music frequencies
-			newMagnitude = magnitude * ap.enhanceFactor
-			enhancedCount++
-		} else if magnitude < lowNoiseThreshold {
-			// Filter out very low signals and avoid too aggressive
-			// Instead of completely zeroing, just reduce
-			newMagnitude = magnitude * 0.3 // Reduce low signals by 70%
-			filteredCount++
-
-			// Calculate filtered power for low/high frequency statistics
-			if i <= midFreqIndex || i >= paddedLength-midFreqIndex {
-				filteredLowFreqPower += (origMagnitude - newMagnitude) * (origMagnitude - newMagnitude)
+		if inMusicRange {
+			// Music frequency handling
+			if magnitude > adaptiveThresholds[i] * 2.0 {
+				// Strong music signal - enhance
+				newMagnitude = magnitude * ap.enhanceFactor
+				enhancedCount++
+			} else if magnitude > adaptiveThresholds[i] {
+				// Moderate music signal - preserve
+				newMagnitude = magnitude
 			} else {
-				filteredHighFreqPower += (origMagnitude - newMagnitude) * (origMagnitude - newMagnitude)
-			}
-		} else {
-			// Keep other frequencies, but if not too low or too high,
-			// apply a little noise reduction
-			if magnitude < highNoiseThreshold {
-				// Apply a soft transition curve
-				ratio := (magnitude - lowNoiseThreshold) / (highNoiseThreshold - lowNoiseThreshold)
-				reduction := ap.noiseReduction * (1.0 - ratio) // Calculate reduction ratio
+				// Weak music signal - reduce noise
+				reduction := ap.noiseReduction * (1.0 - (magnitude / adaptiveThresholds[i]))
 				newMagnitude = magnitude * (1.0 - reduction)
 				filteredCount++
-
-				// Calculate filtered power for low/high frequency statistics
-				if i <= midFreqIndex || i >= paddedLength-midFreqIndex {
-					filteredLowFreqPower += (origMagnitude - newMagnitude) * (origMagnitude - newMagnitude)
-				} else {
-					filteredHighFreqPower += (origMagnitude - newMagnitude) * (origMagnitude - newMagnitude)
-				}
+			}
+		} else {
+			// Non-music frequency handling
+			if magnitude < adaptiveThresholds[i] {
+				// Below threshold - aggressive noise reduction
+				newMagnitude = magnitude * 0.2 // 80% reduction
+				filteredCount++
 			} else {
-				// Keep high power signals
-				newMagnitude = magnitude
+				// Above threshold - moderate reduction
+				reduction := ap.noiseReduction * 1.5 // 50% more reduction
+				newMagnitude = magnitude * (1.0 - reduction)
+				filteredCount++
 			}
 		}
 
-		// Update frequency component (power changed, phase remained the same)
+		// Update frequency component
 		freqDomain[i] = cmplx.Rect(newMagnitude, phase)
+
+		// Calculate filtered power for statistics
+		if freq < 1000 {
+			filteredLowFreqPower += (origMagnitude - newMagnitude) * (origMagnitude - newMagnitude)
+		} else {
+			filteredHighFreqPower += (origMagnitude - newMagnitude) * (origMagnitude - newMagnitude)
+		}
 	}
 
 	// Calculate low/high frequency noise reduction ratios
@@ -542,7 +564,6 @@ func (ap *AudioProcessor) denoiseWithFFT(samples []float64, noiseProfile float64
 	// Calculate cleaned signal with inverse FFT
 	cleanSignal := fft.Sequence(nil, freqDomain)
 
-	// Return to original length and return statistics
 	return cleanSignal[:len(samples)], filteredCount, enhancedCount, lowFreqReduction, highFreqReduction
 }
 
@@ -635,9 +656,30 @@ func (ap *AudioProcessor) analyzeAndSetParameters(buf *audio.IntBuffer) error {
 		}
 	}
 
-	// 1. Analyze signal level
+	// 1. Analyze signal level and noise characteristics
 	var sum, sumSquared float64
 	var maxAmp float64
+	var noiseSum float64
+	var noiseCount int
+
+	// Calculate moving average for noise detection
+	windowSize := 1024
+	for i := 0; i < len(samples)-windowSize; i += windowSize/2 {
+		window := samples[i:i+windowSize]
+		var windowSum float64
+		for _, sample := range window {
+			windowSum += math.Abs(sample)
+		}
+		windowAvg := windowSum / float64(windowSize)
+		
+		// If window average is low, consider it as potential noise
+		if windowAvg < 1000 {
+			noiseSum += windowAvg
+			noiseCount++
+		}
+	}
+
+	// Calculate overall statistics
 	for _, sample := range samples {
 		sum += math.Abs(sample)
 		sumSquared += sample * sample
@@ -645,36 +687,51 @@ func (ap *AudioProcessor) analyzeAndSetParameters(buf *audio.IntBuffer) error {
 			maxAmp = math.Abs(sample)
 		}
 	}
-	meanAmp := sum / float64(len(samples))
-	rmsAmp := math.Sqrt(sumSquared / float64(len(samples)))
 
-	// Calculate crest factor (peak/RMS) - high impulse noise indicates
-	crestFactor := maxAmp / rmsAmp
+	noiseFloor := 0.0
+	if noiseCount > 0 {
+		noiseFloor = noiseSum / float64(noiseCount)
+	}
 
-	// 2. Spectral analysis
-	windowSize := 4096
+	// 2. Spectral analysis with focus on music frequencies
+	windowSize = 4096
 	fft := fourier.NewFFT(windowSize)
 
-	// Define frequency ranges
-	lowBand := [2]int{0, windowSize * 100 / buf.Format.SampleRate}              // 0-100 Hz
-	midLowBand := [2]int{lowBand[1], windowSize * 500 / buf.Format.SampleRate}  // 100-500 Hz
-	midBand := [2]int{midLowBand[1], windowSize * 2000 / buf.Format.SampleRate} // 500-2000 Hz
-	highBand := [2]int{midBand[1], windowSize / 2}                              // 2000+ Hz
+	// Define more detailed frequency bands for music analysis
+	bands := []struct {
+		name     string
+		lowFreq  float64
+		highFreq float64
+		energy   float64
+		isMusic  bool    // Flag to indicate if this band contains music
+		strength float64 // Signal strength relative to noise
+	}{
+		{"Sub-bass", 20, 60, 0, false, 0},
+		{"Bass", 60, 250, 0, false, 0},
+		{"Low-mid", 250, 500, 0, false, 0},
+		{"Mid", 500, 2000, 0, false, 0},
+		{"Upper-mid", 2000, 4000, 0, false, 0},
+		{"Presence", 4000, 6000, 0, false, 0},
+		{"Brilliance", 6000, 8000, 0, false, 0},
+		{"Air", 8000, 20000, 0, false, 0},
+	}
 
-	// Analyze different segments
+	// Analyze segments
 	segments := len(samples) / windowSize
 	if segments < 1 {
 		segments = 1
 	}
 	if segments > 10 {
-		segments = 10 // Analyze at most 10 segments
+		segments = 10
 	}
 
-	var lowEnergy, midLowEnergy, midEnergy, highEnergy float64
 	var totalEnergy float64
-	var noiseFloor float64
+	var musicEnergy float64
+	var noiseEnergy float64
+	var bandNoiseFloors []float64 = make([]float64, len(bands))
 
-	for i := range make([]struct{}, segments) {
+	// First pass: Calculate noise floors for each band
+	for i := 0; i < segments; i++ {
 		startIdx := i * windowSize
 		endIdx := startIdx + windowSize
 		if endIdx > len(samples) {
@@ -684,205 +741,171 @@ func (ap *AudioProcessor) analyzeAndSetParameters(buf *audio.IntBuffer) error {
 		segment := make([]float64, windowSize)
 		copy(segment, samples[startIdx:endIdx])
 
-		// If segment length is less than windowSize, zero out the remaining part
-		if endIdx-startIdx < windowSize {
-			for j := endIdx - startIdx; j < windowSize; j++ {
-				segment[j] = 0
-			}
+		// Apply Hanning window
+		for j := range segment {
+			segment[j] *= 0.5 * (1 - math.Cos(2*math.Pi*float64(j)/float64(windowSize-1)))
 		}
 
-		// Apply FFT
 		spectrum := fft.Coefficients(nil, segment)
+		freqResolution := float64(buf.Format.SampleRate) / float64(windowSize)
 
-		// Estimate noise level (minimum values in high frequencies)
-		var highFreqMin float64 = math.MaxFloat64
-		highFreqRange := highBand[1] - highBand[0]
-		for j := range make([]struct{}, highFreqRange) {
-			idx := j + highBand[0]
-			magnitude := cmplx.Abs(spectrum[idx])
-			if magnitude > 0.001 && magnitude < highFreqMin {
-				highFreqMin = magnitude
+		// Calculate minimum values in each band (noise floor estimate)
+		for b := range bands {
+			var minMagnitude float64 = math.MaxFloat64
+			startBin := int(bands[b].lowFreq / freqResolution)
+			endBin := int(bands[b].highFreq / freqResolution)
+			
+			for bin := startBin; bin < endBin && bin < len(spectrum)/2; bin++ {
+				magnitude := cmplx.Abs(spectrum[bin])
+				if magnitude > 0.001 && magnitude < minMagnitude {
+					minMagnitude = magnitude
+				}
 			}
-		}
-
-		// Check for very large values
-		if highFreqMin == math.MaxFloat64 || math.IsInf(highFreqMin, 0) || math.IsNaN(highFreqMin) {
-			highFreqMin = 100.0 // Use a default value
-		}
-
-		noiseFloor += highFreqMin
-
-		// Calculate energy for each frequency band
-		for band, bandRange := range [][2]int{lowBand, midLowBand, midBand, highBand} {
-			var bandEnergy float64
-			bandWidth := bandRange[1] - bandRange[0]
-			for j := range make([]struct{}, bandWidth) {
-				idx := j + bandRange[0]
-				magnitude := cmplx.Abs(spectrum[idx])
-				bandEnergy += magnitude * magnitude
+			
+			if minMagnitude != math.MaxFloat64 {
+				bandNoiseFloors[b] += minMagnitude
 			}
-
-			// Sum band energies
-			switch band {
-			case 0:
-				lowEnergy += bandEnergy
-			case 1:
-				midLowEnergy += bandEnergy
-			case 2:
-				midEnergy += bandEnergy
-			case 3:
-				highEnergy += bandEnergy
-			}
-
-			totalEnergy += bandEnergy
 		}
 	}
 
-	// Calculate average values
-	lowEnergy /= float64(segments)
-	midLowEnergy /= float64(segments)
-	midEnergy /= float64(segments)
-	highEnergy /= float64(segments)
+	// Average noise floors
+	for b := range bandNoiseFloors {
+		bandNoiseFloors[b] /= float64(segments)
+		if bandNoiseFloors[b] < 0.001 {
+			bandNoiseFloors[b] = 0.001 // Prevent division by zero
+		}
+	}
+
+	// Second pass: Analyze signal strength and identify music bands
+	for i := 0; i < segments; i++ {
+		startIdx := i * windowSize
+		endIdx := startIdx + windowSize
+		if endIdx > len(samples) {
+			endIdx = len(samples)
+		}
+
+		segment := make([]float64, windowSize)
+		copy(segment, samples[startIdx:endIdx])
+
+		// Apply Hanning window
+		for j := range segment {
+			segment[j] *= 0.5 * (1 - math.Cos(2*math.Pi*float64(j)/float64(windowSize-1)))
+		}
+
+		spectrum := fft.Coefficients(nil, segment)
+		freqResolution := float64(buf.Format.SampleRate) / float64(windowSize)
+
+		// Analyze each frequency band
+		for bin := 1; bin < windowSize/2; bin++ {
+			freq := freqResolution * float64(bin)
+			magnitude := cmplx.Abs(spectrum[bin])
+			power := magnitude * magnitude
+
+			// Add to appropriate band
+			for b := range bands {
+				if freq >= bands[b].lowFreq && freq < bands[b].highFreq {
+					bands[b].energy += power
+					
+					// Calculate signal-to-noise ratio for this frequency
+					snr := magnitude / bandNoiseFloors[b]
+					if snr > bands[b].strength {
+						bands[b].strength = snr
+					}
+					
+					// If signal is significantly above noise floor, mark as music
+					if snr > 3.0 {
+						bands[b].isMusic = true
+					}
+					
+					break
+				}
+			}
+
+			// Determine if this is likely music or noise
+			if magnitude > noiseFloor*3 {
+				musicEnergy += power
+			} else {
+				noiseEnergy += power
+			}
+			totalEnergy += power
+		}
+	}
+
+	// Normalize energies and calculate band statistics
+	for i := range bands {
+		bands[i].energy /= float64(segments)
+	}
+	musicEnergy /= float64(segments)
+	noiseEnergy /= float64(segments)
 	totalEnergy /= float64(segments)
 
-	// Noise floor calculation for safer result
-	if segments > 0 {
-		noiseFloor /= float64(segments)
-	} else {
-		noiseFloor = 0.001 // Use a default value
-	}
-
-	// Adjust for very small noise floor values
-	if noiseFloor < 0.001 {
-		noiseFloor = 0.001 // To prevent logarithmic calculation error in very small values
-	}
-
-	// Calculate band energy ratios
-	lowRatio := lowEnergy / totalEnergy
-	midLowRatio := midLowEnergy / totalEnergy
-	midRatio := midEnergy / totalEnergy
-	highRatio := highEnergy / totalEnergy
-
-	// Calculate dynamic range (in dB)
-	var dynamicRange float64
-	if noiseFloor > 0 && maxAmp > 0 {
-		dynamicRange = 20 * math.Log10(maxAmp/noiseFloor)
-		// Limit very high or very low dynamic range values
-		if dynamicRange > 120 {
-			dynamicRange = 120 // Maximum reasonable dynamic range
-		} else if dynamicRange < 0 {
-			dynamicRange = 0 // Reset negative values
+	// Find the lowest and highest frequency bands that contain music
+	var lowestMusicFreq, highestMusicFreq float64
+	foundMusic := false
+	
+	for _, band := range bands {
+		if band.isMusic {
+			if !foundMusic {
+				lowestMusicFreq = band.lowFreq
+				foundMusic = true
+			}
+			highestMusicFreq = band.highFreq
 		}
-	} else {
-		dynamicRange = 40 // Use a default value
 	}
 
-	// 3. Parameter determination
-
-	// a. Threshold - adjust based on noise floor and average signal level
-	var signalToNoiseRatio float64
-	if noiseFloor > 0 {
-		signalToNoiseRatio = meanAmp / noiseFloor
-	} else {
-		signalToNoiseRatio = 10 // Use a default value
+	// If no clear music bands found, use default ranges
+	if !foundMusic {
+		lowestMusicFreq = 60
+		highestMusicFreq = 8000
 	}
 
-	// Adjust threshold based on signal/noise ratio and crest factor
-	if signalToNoiseRatio > 100 {
-		// Very clean signal
+	// Set frequency range with some margin
+	ap.frequencyRange[0] = math.Max(lowestMusicFreq*0.8, 20)  // Protect slightly below lowest music frequency
+	ap.frequencyRange[1] = math.Min(highestMusicFreq*1.2, 20000) // Protect slightly above highest music frequency
+
+	// Adjust other parameters based on music detection
+	musicToNoiseRatio := musicEnergy / (noiseEnergy + 0.0001)
+	
+	// Threshold adjustment
+	if musicToNoiseRatio > 10 {
+		ap.threshold = noiseFloor * 1.5
+	} else if musicToNoiseRatio > 5 {
 		ap.threshold = noiseFloor * 2.0
-	} else if signalToNoiseRatio > 50 {
-		// Good signal
+	} else {
 		ap.threshold = noiseFloor * 2.5
-	} else if signalToNoiseRatio > 20 {
-		// Medium signal
-		ap.threshold = noiseFloor * 3.0
-	} else if signalToNoiseRatio > 10 {
-		// Noisy signal
-		ap.threshold = noiseFloor * 3.5
-	} else {
-		// Very noisy signal
-		ap.threshold = noiseFloor * 4.0
 	}
 
-	// Limit very high or low values
-	if ap.threshold < 100 {
-		ap.threshold = 100
-	} else if ap.threshold > 1000 {
-		ap.threshold = 1000
-	}
-
-	// b. Noise reduction ratio - adjust based on noise level and dynamic range
-	if dynamicRange > 60 {
-		// Wide dynamic range - less reduction
-		ap.noiseReduction = 0.25
-	} else if dynamicRange > 40 {
-		// Medium dynamic range
-		ap.noiseReduction = 0.3
-	} else if dynamicRange > 30 {
-		// Narrow dynamic range
+	// Noise reduction adjustment
+	if noiseEnergy/totalEnergy > 0.3 {
 		ap.noiseReduction = 0.4
+	} else if noiseEnergy/totalEnergy > 0.2 {
+		ap.noiseReduction = 0.3
 	} else {
-		// Very narrow dynamic range - more reduction
-		ap.noiseReduction = 0.45
+		ap.noiseReduction = 0.2
 	}
 
-	// Very high crest factor impulse noise indicates
-	if crestFactor > 5 {
-		ap.noiseReduction += 0.05
-	}
-
-	// c. Signal enhancement factor - adjust based on music content
-	// Mid and midlow bands indicate music content
-	musicContentRatio := (midRatio + midLowRatio)
-	if musicContentRatio > 0.7 {
-		// High music content - less enhancement
+	// Enhancement factor adjustment
+	if musicToNoiseRatio > 8 {
 		ap.enhanceFactor = 1.05
-	} else if musicContentRatio > 0.5 {
+	} else if musicToNoiseRatio > 4 {
 		ap.enhanceFactor = 1.1
-	} else if musicContentRatio > 0.3 {
+	} else {
 		ap.enhanceFactor = 1.15
-	} else {
-		// Low music content - more enhancement
-		ap.enhanceFactor = 1.2
 	}
 
-	// d. Frequency range - adjust based on spectral content
-	// Low frequency limit
-	if lowRatio > 0.3 {
-		// High energy in low frequencies - lower limit
-		ap.frequencyRange[0] = 40
-	} else if lowRatio > 0.15 {
-		ap.frequencyRange[0] = 60
-	} else {
-		// Low frequencies have low energy - higher limit
-		ap.frequencyRange[0] = 80
-	}
-
-	// High frequency limit
-	if highRatio > 0.1 {
-		// High energy in high frequencies - higher limit
-		ap.frequencyRange[1] = 16000
-	} else if highRatio > 0.05 {
-		ap.frequencyRange[1] = 14000
-	} else {
-		// High frequencies have low energy - lower limit
-		ap.frequencyRange[1] = 12000
-	}
-
-	// Analyze results
 	if ap.verbose {
 		fmt.Printf("AUDIO ANALYSIS RESULTS:\n")
-		fmt.Printf("  Average signal level: %.2f\n", meanAmp)
-		fmt.Printf("  RMS level: %.2f\n", rmsAmp)
-		fmt.Printf("  Maximum amplitude: %.2f\n", maxAmp)
-		fmt.Printf("  Crest factor: %.2f\n", crestFactor)
+		fmt.Printf("  Music/Noise ratio: %.2f\n", musicToNoiseRatio)
 		fmt.Printf("  Noise floor: %.2f\n", noiseFloor)
-		fmt.Printf("  Signal/Noise ratio: %.2f\n", signalToNoiseRatio)
-		fmt.Printf("  Dynamic range: %.2f dB\n", dynamicRange)
-		fmt.Printf("  Band energy ratios: low=%.2f, midlow=%.2f, mid=%.2f, high=%.2f\n",
-			lowRatio, midLowRatio, midRatio, highRatio)
-		fmt.Printf("  Music content ratio: %.2f\n", musicContentRatio)
+		fmt.Printf("  Detected music range: %.0f-%.0f Hz\n", lowestMusicFreq, highestMusicFreq)
+		fmt.Printf("  Protected frequency range: %.0f-%.0f Hz\n", ap.frequencyRange[0], ap.frequencyRange[1])
+		fmt.Printf("  Band analysis:\n")
+		for _, band := range bands {
+			fmt.Printf("    %s (%.0f-%.0f Hz):\n", band.name, band.lowFreq, band.highFreq)
+			fmt.Printf("      Energy: %.2e\n", band.energy)
+			fmt.Printf("      Signal/Noise: %.2f\n", band.strength)
+			fmt.Printf("      Contains music: %v\n", band.isMusic)
+		}
 		fmt.Println("----------------------------------------")
 	}
 
