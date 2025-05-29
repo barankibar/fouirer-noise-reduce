@@ -14,7 +14,94 @@ import (
 	"github.com/go-audio/audio"
 	"github.com/go-audio/wav"
 	"gonum.org/v1/gonum/dsp/fourier"
+	"github.com/gordonklaus/portaudio"
 )
+
+const (
+	sampleRate = 44100
+	channels   = 1
+	frameSize  = 1024
+)
+
+
+func (ap *AudioProcessor) ProcessAudio(input []float64) []float64 {
+	output := make([]float64, len(input))
+	windowSize := 5
+	for i := range input {
+		var sum float64
+		var count int
+		for j := -windowSize/2; j <= windowSize/2; j++ {
+			idx := i + j
+			if idx >= 0 && idx < len(input) {
+				sum += input[idx]
+				count++
+			}
+		}
+		avg := sum / float64(count)
+		if math.Abs(input[i]-avg) < ap.threshold {
+			output[i] = avg
+		} else {
+			output[i] = input[i] * ap.enhanceFactor
+		}
+	}
+	return output
+}
+
+// RunRealtimeStream starts real-time audio processing
+func RunRealtimeStream(processor *AudioProcessor) error {
+	err := portaudio.Initialize()
+	if err != nil {
+		return fmt.Errorf("PortAudio initialization error: %v", err)
+	}
+	defer portaudio.Terminate()
+
+	inputBuffer := make([]float32, frameSize)
+	outputBuffer := make([]float32, frameSize)
+
+	stream, err := portaudio.OpenDefaultStream(channels, channels, float64(sampleRate), frameSize, inputBuffer, outputBuffer)
+	if err != nil {
+		return fmt.Errorf("Stream creation error: %v", err)
+	}
+	defer stream.Close()
+
+	err = stream.Start()
+	if err != nil {
+		return fmt.Errorf("Stream start error: %v", err)
+	}
+	defer stream.Stop()
+
+	fmt.Println("Real-time noise reduction started. Press Ctrl+C to exit.")
+
+	for {
+		err = stream.Read()
+		if err != nil {
+			fmt.Printf("Read error: %v\n", err)
+			continue
+		}
+
+		// float32'den float64'e dönüştür
+		inputFloat64 := make([]float64, frameSize)
+		for i := range inputBuffer {
+			inputFloat64[i] = float64(inputBuffer[i])
+		}
+
+		// Ses işleme
+		outputFloat64 := processor.ProcessAudio(inputFloat64)
+
+		// float64'ten float32'ye dönüştür
+		for i := range outputFloat64 {
+			outputBuffer[i] = float32(outputFloat64[i])
+		}
+
+		err = stream.Write()
+		if err != nil {
+			fmt.Printf("Write error: %v\n", err)
+			continue
+		}
+
+		time.Sleep(time.Millisecond * 10)
+	}
+} 
 
 // AudioProcessor, intermediate structure managing the audio processing operations
 type AudioProcessor struct {
@@ -619,20 +706,27 @@ func nextPowerOfTwo(n int) int {
 }
 
 // parseCommandLine, handles command line arguments
-func parseCommandLine() (string, string, float64, bool, bool, error) {
+func parseCommandLine() (string, string, float64, bool, bool, bool, error) {
 	var inputFile string
 	var outputFile string
 	var threshold float64
 	var verbose bool
+	var streamline bool
 
 	flag.StringVar(&inputFile, "input", "", "Input audio file (WAV format)")
 	flag.StringVar(&outputFile, "output", "", "Output audio file (cleaned)")
 	flag.Float64Var(&threshold, "threshold", 200.0, "Noise filtering threshold value (will be automatically adjusted)")
 	flag.BoolVar(&verbose, "verbose", false, "Show detailed process information")
+	flag.BoolVar(&streamline, "streamline", false, "Enable real-time microphone noise reduction stream mode")
 	flag.Parse()
 
+	if streamline {
+		// Do not need file for streamline mode
+		return "", "", threshold, verbose, true, true, nil
+	}
+
 	if inputFile == "" {
-		return "", "", 0, false, true, errors.New("input file not specified")
+		return "", "", 0, false, true, false, errors.New("input file not specified")
 	}
 
 	// Add default data directory for input if not specified
@@ -650,7 +744,7 @@ func parseCommandLine() (string, string, float64, bool, bool, error) {
 		outputFile = filepath.Join("./data", outputFile)
 	}
 
-	return inputFile, outputFile, threshold, verbose, true, nil
+	return inputFile, outputFile, threshold, verbose, true, false, nil
 }
 
 // analyzeAndSetParameters, analyzes audio file and determines the best parameters
@@ -1767,12 +1861,21 @@ func min(a, b int) int {
 	return b
 }
 
+func runRealtimeStream(processor *AudioProcessor) error {
+	sp := &AudioProcessor{
+		threshold:      processor.threshold,
+		noiseReduction: processor.noiseReduction,
+		enhanceFactor:  processor.enhanceFactor,
+	}
+	return RunRealtimeStream(sp)
+}
+
 func main() {
 	// Handle command line arguments
-	inputFile, outputFile, threshold, verbose, autoParams, err := parseCommandLine()
+	inputFile, outputFile, threshold, verbose, autoParams, streamline, err := parseCommandLine()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		fmt.Fprintln(os.Stderr, "Usage: go run main.go -input=input.wav -output=cleaned.wav -verbose=true")
+		fmt.Fprintln(os.Stderr, "Usage: go run main.go -input=input.wav -output=cleaned.wav -verbose=true [-streamline]")
 		os.Exit(1)
 	}
 
@@ -1781,6 +1884,16 @@ func main() {
 
 	// Create audio processor
 	processor := NewAudioProcessor(inputFile, outputFile, threshold, verbose, autoParams)
+
+	if streamline {
+		fmt.Println("[STREAMLINE] Real-time microphone noise reduction started...")
+		err := runRealtimeStream(processor)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Stream error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	// Start process
 	if err := processor.Process(); err != nil {
